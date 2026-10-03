@@ -2818,7 +2818,8 @@ extension TerminalView {
     {
         terminal.resize (cols: cols, rows: rows)
         sizeChanged (source: terminal)
-        terminal.softReset()
+        // A local viewport/font change must preserve remote application modes.
+        // DECSTR is a protocol action, not a rendering operation.
     }
 
     /**
