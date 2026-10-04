@@ -677,13 +677,21 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     @objc func longPress (_ gestureRecognizer: UILongPressGestureRecognizer)
     {
          if gestureRecognizer.state == .began {
-             let _ = self.becomeFirstResponder()
-             let tapLocation = gestureRecognizer.location(in: gestureRecognizer.view)
-             let tapRegion = makeContextMenuRegionForTap (point: tapLocation)
-             
-             showContextMenu (forRegion: tapRegion,
-                              pos: calculateTapHit (gesture: gestureRecognizer).grid)
+             selectOutputWord(at: gestureRecognizer.location(in: self))
           }
+    }
+
+    /// Starts an output selection at a view-relative point, independently of the
+    /// input buffer used by UITextInput. Long press selects immediately so the
+    /// highlight and drag handles are visible before the edit menu appears.
+    public func selectOutputWord(at point: CGPoint) {
+        _ = becomeFirstResponder()
+        let hit = calculateTapHit(point: point).grid
+        selection.selectWordOrExpression(at: hit, in: terminal.displayBuffer)
+        selection.selectionMode = .character
+        enableSelectionPanGesture()
+        requestDisplay()
+        showContextMenu(forRegion: makeContextMenuRegionForSelection(), pos: hit)
     }
     
     /// This controls whether the backspace should send ^? or ^H, the default is ^?
