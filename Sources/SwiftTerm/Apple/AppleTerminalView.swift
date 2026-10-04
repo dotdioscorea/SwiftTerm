@@ -3195,6 +3195,9 @@ extension TerminalView {
     /// Clears the selection
     public func selectNone () {
         selection.selectNone()
+        #if canImport(UIKit)
+        disableSelectionPanGesture()
+        #endif
     }
 
 }

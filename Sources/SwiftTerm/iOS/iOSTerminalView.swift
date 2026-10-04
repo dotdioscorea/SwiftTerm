@@ -1476,7 +1476,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     /// for callers that don't have a UIResponder hook into the menu
     /// system (where `selectNone` would otherwise come from).
     public func clearSelection() {
-        selection?.selectNone()
+        selectNone()
     }
 
     /// Programmatically presents SwiftTerm's standard Copy / Paste /
