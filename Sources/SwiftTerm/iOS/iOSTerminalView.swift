@@ -1788,6 +1788,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
         if sizeChanged {
             processSizeChange(newSize: currentBounds.size)
+            // Keyboard animations can settle at a different pixel height while
+            // keeping the same row count. Re-pin the viewport even when no PTY
+            // resize occurs; updateScroller preserves manual scroll tracking.
+            updateScroller()
             updateCursorPosition()
         }
 
