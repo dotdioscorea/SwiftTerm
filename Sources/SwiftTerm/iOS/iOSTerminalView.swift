@@ -637,7 +637,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     ///  - region: This is the location that we want to avoid having the menu being shown
     ///  - pos: the location where this was triggered in the buffer, it used at a later point
     ///  to auto-select a word
-    func showContextMenu (forRegion: CGRect, pos: Position) {
+    open func showContextMenu (forRegion: CGRect, pos: Position) {
         var items: [UIMenuItem] = []
         
         lastLongSelect = pos
@@ -684,8 +684,12 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     /// Starts an output selection at a view-relative point, independently of the
     /// input buffer used by UITextInput. Long press selects immediately so the
     /// highlight and drag handles are visible before the edit menu appears.
+    public var focusesInputOnOutputSelection = true
+
     public func selectOutputWord(at point: CGPoint) {
-        _ = becomeFirstResponder()
+        if focusesInputOnOutputSelection {
+            _ = becomeFirstResponder()
+        }
         let hit = calculateTapHit(point: point).grid
         selection.selectWordOrExpression(at: hit, in: terminal.displayBuffer)
         selection.selectionMode = .character

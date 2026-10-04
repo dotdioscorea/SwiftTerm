@@ -2242,8 +2242,11 @@ extension TerminalView {
             let start, end: Position
 
             func drawSelectionHandle (drawStart: Bool, row: Int) {
-                guard row >= firstRow && row <= lastRow else { return }
                 let lineOffset = calcLineOffset(forRow: row)
+                // lastRow may be the first fully offscreen row. Only clamp a handle
+                // whose endpoint row actually intersects the viewport.
+                guard lineOffset > bounds.minY,
+                      lineOffset - cellDimension.height < bounds.maxY else { return }
                 let lineOrigin = frame.height - lineOffset
                 
                 context.saveGState ()
