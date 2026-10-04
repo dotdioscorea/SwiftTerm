@@ -2242,6 +2242,7 @@ extension TerminalView {
             let start, end: Position
 
             func drawSelectionHandle (drawStart: Bool, row: Int) {
+                guard row >= firstRow && row <= lastRow else { return }
                 let lineOffset = calcLineOffset(forRow: row)
                 let lineOrigin = frame.height - lineOffset
                 
@@ -2256,10 +2257,16 @@ extension TerminalView {
                 let size = 12.0
                 let location = drawStart ? end : start
                 
-                let rect = CGRect (origin:
+                var rect = CGRect (origin:
                                     CGPoint (x: location.x-(size/2.0),
                                              y: location.y - (drawStart ? 0.0 : size)),
                                    size: CGSize (width: size, height: size))
+                // Handles at the first/last visible row or column otherwise extend outside the
+                // scroll view and are clipped. Keep visible endpoints inside the viewport.
+                rect.origin.x = min(max(rect.minX, bounds.minX + 1), max(bounds.minX + 1, bounds.maxX - size - 1))
+                let viewportMinY = frame.height - bounds.maxY + 1
+                let viewportMaxY = frame.height - bounds.minY - size - 1
+                rect.origin.y = min(max(rect.minY, viewportMinY), max(viewportMinY, viewportMaxY))
                 context.addEllipse(in: rect)
                 context.closePath()
                 context.setLineWidth(2)
