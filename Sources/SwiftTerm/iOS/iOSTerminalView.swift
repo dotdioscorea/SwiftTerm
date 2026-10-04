@@ -817,6 +817,14 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
     @objc func singleTap (_ gestureRecognizer: UITapGestureRecognizer)
     {
+        // Output selection must be dismissible without entering text-input mode.
+        if !focusesInputOnOutputSelection && selection.active {
+            guard gestureRecognizer.view != nil, gestureRecognizer.state == .ended else { return }
+            selection.selectNone()
+            disableSelectionPanGesture()
+            queuePendingDisplay()
+            return
+        }
         if isFirstResponder {
             guard gestureRecognizer.view != nil else { return }
 
