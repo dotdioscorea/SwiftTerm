@@ -2252,6 +2252,7 @@ extension TerminalView {
             let start, end: Position
 
             func drawSelectionHandle (drawStart: Bool, row: Int) {
+                let multiline = start.row != end.row
                 let lineOffset = calcLineOffset(forRow: row)
                 // lastRow may be the first fully offscreen row. Only clamp a handle
                 // whose endpoint row actually intersects the viewport.
@@ -2267,25 +2268,48 @@ extension TerminalView {
                 
                 context.move(to: end)
                 context.addLine(to: start)
+                context.setLineWidth(2)
+                selectionHandleColor.setStroke()
+                context.strokePath()
                 let size = 12.0
-                let location = drawStart ? end : start
-                
+                let viewportMinY = frame.height - bounds.maxY + 1
+                let viewportMaxY = frame.height - bounds.minY - 1
+                var location = drawStart ? end : start
+                var above = drawStart
+                var flipped = false
+                // A clamp would move the knob over its own endpoint's glyphs.
+                // Flip to the other side of the row when the preferred side is
+                // outside the viewport, keeping the stem at the true boundary.
+                if drawStart ? location.y + size > viewportMaxY : location.y - size < viewportMinY {
+                    above.toggle()
+                    flipped = true
+                    location = drawStart ? start : end
+                }
                 var rect = CGRect (origin:
                                     CGPoint (x: location.x-(size/2.0),
-                                             y: location.y - (drawStart ? 0.0 : size)),
+                                             y: location.y - (above ? 0.0 : size)),
                                    size: CGSize (width: size, height: size))
-                // Handles at the first/last visible row or column otherwise extend outside the
-                // scroll view and are clipped. Keep visible endpoints inside the viewport.
+                // Keep edge columns visible. In a viewport too short to fit a
+                // knob beside the row, let UIKit clip it rather than erase text.
                 rect.origin.x = min(max(rect.minX, bounds.minX + 1), max(bounds.minX + 1, bounds.maxX - size - 1))
-                let viewportMinY = frame.height - bounds.maxY + 1
-                let viewportMaxY = frame.height - bounds.minY - size - 1
-                rect.origin.y = min(max(rect.minY, viewportMinY), max(viewportMinY, viewportMaxY))
-                context.addEllipse(in: rect)
-                context.closePath()
-                context.setLineWidth(2)
-                selectionHandleColor.set ()
-                //TTColor.systemBlue.set ()
-                context.drawPath(using: .fillStroke)
+                // The adjacent row is selected in a multiline range. Leave the
+                // knob hollow there so its fill does not erase those glyphs.
+                // Two ring colors also keep it visible over unselected cells
+                // when a short range ends to the left of its starting column.
+                if flipped && multiline {
+                    context.setLineWidth(2)
+                    selectionHandleColor.setStroke()
+                    context.strokeEllipse(in: rect)
+                    context.setLineWidth(1)
+                    selectedTextForegroundColor.withAlphaComponent(selectionHandleColor.cgColor.alpha).setStroke()
+                    context.strokeEllipse(in: rect)
+                } else {
+                    context.addEllipse(in: rect)
+                    context.setLineWidth(1)
+                    selectionHandleColor.setFill()
+                    selectedTextForegroundColor.withAlphaComponent(selectionHandleColor.cgColor.alpha).setStroke()
+                    context.drawPath(using: .fillStroke)
+                }
                 context.restoreGState()
             }
             

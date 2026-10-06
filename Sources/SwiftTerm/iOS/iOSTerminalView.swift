@@ -3275,7 +3275,7 @@ extension TerminalView: UIAccessibilityReadingContent {
 
         let line = terminal.displayBuffer.lines[row]
         let rawLimit = endCol == -1 ? line.count : min(endCol, line.count)
-        let lineLimit = min(rawLimit, line.getTrimmedLength())
+        let lineLimit = min(rawLimit, line.getTrimmedLength(), terminal.cols)
         guard line.hasAnyContent(), lineLimit > 0 else {
             return NSAttributedString(string: "")
         }
@@ -3312,7 +3312,7 @@ extension TerminalView: UIAccessibilityReadingContent {
             break
         }
 
-        guard start.row >= 0, start.row <= buffer.lines.count else {
+        guard start.row >= 0, start.row < buffer.lines.count else {
             return NSAttributedString(string: "")
         }
 
@@ -3391,99 +3391,77 @@ extension TerminalView: UIAccessibilityReadingContent {
     }
 
     public func accessibilityLineNumber(for point: CGPoint) -> Int {
-        return Int(floor(max(point.y,0) / cellDimension.height))
-    }
-    
-    func startingLine(forLineNumber lineNumber: Int) -> Int {
-        let lineWidth = terminal.buffer.lines[lineNumber].count
-        var startingLine = lineNumber
-        while startingLine >= 1 {
-            startingLine -= 1
-            if terminal.buffer.lines[startingLine + 1].isWrapped {
-                continue
-            }
-            let start = Position(col: 0, row: startingLine)
-            let end = Position(col: terminal.buffer.lines[startingLine].count, row: startingLine)
-            let text =  terminal.getDisplayText(start: start, end: end)
-            if (text.count != terminal.buffer.lines[startingLine].count || text.last != " ") {
-                // previous line is incomplete. Don't use it
-                startingLine += 1
-                break
-            }
-        }
-        return startingLine
+        guard let window, point.x.isFinite, point.y.isFinite,
+              cellDimension.height > 0 else { return NSNotFound }
+        // Reading-content points are in screen coordinates. UIKit's conversion
+        // already accounts for this scroll view's bounds origin.
+        let local = convert(window.convert(point, from: nil as UIWindow?), from: window)
+        guard bounds.contains(local) else { return NSNotFound }
+        let row = floor(local.y / cellDimension.height)
+        guard row >= 0, row < CGFloat(terminal.displayBuffer.lines.count) else { return NSNotFound }
+        return Int(row)
     }
 
-    func endingLine(forLineNumber lineNumber: Int) -> Int {
-        let lineWidth = terminal.buffer.lines[lineNumber].count
-        var endingLine = lineNumber
-        while (endingLine < terminal.buffer.lines.count - 1) {
-            let start = Position(col: 0, row: endingLine)
-            let end = Position(col: terminal.buffer.lines[endingLine].count, row: endingLine)
-            let text =  terminal.getDisplayText(start: start, end: end)
-            if (text.count != terminal.buffer.lines[endingLine].count || text.last != " ")
-            && !terminal.buffer.lines[endingLine + 1].isWrapped {
-                // this line is incomplete. We stop here.
-                break
-            }
-            endingLine += 1
-        }
-        return endingLine
+    private func accessibilityLogicalLineRange(for lineNumber: Int) -> ClosedRange<Int>? {
+        let lines = terminal.displayBuffer.lines
+        guard lineNumber >= 0, lineNumber < lines.count else { return nil }
+        var first = lineNumber
+        var last = lineNumber
+        while first > 0, lines[first].isWrapped { first -= 1 }
+        while last + 1 < lines.count, lines[last + 1].isWrapped { last += 1 }
+        return first...last
+    }
+
+    private func accessibilityVisibleLineRange() -> ClosedRange<Int>? {
+        let count = terminal.displayBuffer.lines.count
+        let height = cellDimension.height
+        guard count > 0, height.isFinite, height > 0,
+              bounds.height.isFinite, bounds.height > 0, bounds.minY.isFinite else { return nil }
+        let contentHeight = CGFloat(count) * height
+        // Intersect the actual viewport with the buffer. A bottom inset may
+        // move the resting viewport farther down than contentHeight - height.
+        let top = max(0, bounds.minY)
+        let bottom = min(contentHeight, bounds.maxY)
+        guard top < bottom else { return nil }
+        let first = min(count - 1, Int(floor(top / height)))
+        let last = min(count - 1, Int(ceil(bottom / height)) - 1)
+        return first...max(first, last)
+    }
+
+    private func accessibilityPositions(for range: ClosedRange<Int>) -> (Position, Position) {
+        (Position(col: 0, row: range.lowerBound),
+         Position(col: min(terminal.cols, terminal.displayBuffer.lines[range.upperBound].count), row: range.upperBound))
     }
 
     public func accessibilityContent(forLineNumber lineNumber: Int) -> String? {
-        var startingLine = startingLine(forLineNumber: lineNumber)
-        var endingLine = endingLine(forLineNumber: lineNumber)
-        let start = Position(col: 0, row: startingLine)
-        let end = Position(col: terminal.buffer.lines[endingLine].count,
-                           row: endingLine)
-        var text =  terminal.getDisplayText(start: start, end: end)
-        return terminal.getDisplayText(start: start, end: end)
+        guard let range = accessibilityLogicalLineRange(for: lineNumber) else { return nil }
+        let (start, end) = accessibilityPositions(for: range)
+        return accessibilityAttributedDisplayText(start: start, end: end).string
     }
 
     public func accessibilityFrame(forLineNumber lineNumber: Int) -> CGRect {
-        let topVisibleLine = Int(contentOffset.y/cellDimension.height)
-        let offset = contentOffset.y - CGFloat(topVisibleLine) * cellDimension.height
-        var startingLine = startingLine(forLineNumber: lineNumber)
-        var endingLine = endingLine(forLineNumber: lineNumber)
-        var verticalWidth = CGFloat(endingLine - startingLine + 1)
-        let lineOffset =  cellDimension.height * CGFloat (startingLine - topVisibleLine + 1)
-        let lineOrigin = CGPoint(x: 0, y: lineOffset)
-        let columnCount = terminal.buffer.lines[lineNumber].count
-        var rect = CGRect(
-            x: lineOrigin.x,
-            y: lineOrigin.y + 3 - offset,
-            width: CGFloat(columnCount) * cellDimension.width,
-            height: verticalWidth * cellDimension.height)
-        return rect
+        guard let window, let range = accessibilityLogicalLineRange(for: lineNumber) else { return .zero }
+        let rect = CGRect(x: 0, y: CGFloat(range.lowerBound) * cellDimension.height,
+                          width: CGFloat(min(terminal.cols, terminal.displayBuffer.lines[lineNumber].count)) * cellDimension.width,
+                          height: CGFloat(range.count) * cellDimension.height)
+        return window.convert(convert(rect, to: window), to: nil as UIWindow?)
     }
 
     public func accessibilityPageContent() -> String? {
-        let pageHeight = max(bounds.height, cellDimension.height)
-        let lines = Int(floor(pageHeight/cellDimension.height))
-        let startLine = Int(floor(contentOffset.y / cellDimension.height))
-        let start = Position(col: 0, row: startLine)
-        let end = Position(col: terminal.buffer.lines[startLine].count,
-                           row: startLine + lines)
-        return terminal.getDisplayText(start: start, end: end)
+        guard let range = accessibilityVisibleLineRange() else { return nil }
+        let (start, end) = accessibilityPositions(for: range)
+        return accessibilityAttributedDisplayText(start: start, end: end).string
     }
 
     public func accessibilityAttributedContent(forLineNumber lineNumber: Int) -> NSAttributedString? {
-        var startingLine = startingLine(forLineNumber: lineNumber)
-        var endingLine = endingLine(forLineNumber: lineNumber)
-        var start = Position(col: 0, row: startingLine)
-        var end = Position(col: terminal.buffer.lines[endingLine].count,
-                           row: endingLine)
+        guard let range = accessibilityLogicalLineRange(for: lineNumber) else { return nil }
+        let (start, end) = accessibilityPositions(for: range)
         return accessibilityAttributedDisplayText(start: start, end: end)
     }
 
     public func accessibilityAttributedPageContent() -> NSAttributedString? {
-        let pageHeight = max(bounds.height, cellDimension.height)
-        let lines = Int(floor(pageHeight/cellDimension.height))
-        let startLine = Int(floor(contentOffset.y / cellDimension.height))
-        let start = Position(col: 0, row: startLine)
-        let end = Position(col: terminal.buffer.lines[startLine].count,
-                           row: startLine + lines)
+        guard let range = accessibilityVisibleLineRange() else { return nil }
+        let (start, end) = accessibilityPositions(for: range)
         return accessibilityAttributedDisplayText(start: start, end: end)
     }
 }
