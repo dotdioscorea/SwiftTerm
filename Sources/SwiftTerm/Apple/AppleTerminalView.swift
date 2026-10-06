@@ -308,11 +308,21 @@ extension TerminalView {
             resize(cols: newCols, rows: newRows)
         }
         updateCaretView()
+        #if os(iOS) || os(visionOS)
+        // Different fonts can yield the same fitted viewport height. UIKit then
+        // has no bounds-size change to trigger the scroller/caret refresh. Keep
+        // content metrics and the live cursor in sync before the next frame,
+        // while retaining the user's scrollback position through updateScroller.
+        if terminal != nil {
+            updateScroller()
+            updateCursorPosition()
+        }
+        #endif
         
         #if os(macOS)
         needsDisplay = true
         #else
-        setNeedsDisplay(frame)
+        setNeedsDisplay(bounds)
         #endif
     }
     
