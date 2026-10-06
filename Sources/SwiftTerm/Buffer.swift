@@ -774,6 +774,9 @@ public final class Buffer {
     
     public func resize (newCols : Int, newRows : Int)
     {
+        // Row-count changes move the live viewport with the cursor. A reader in
+        // scrollback must keep the same top line unless history itself is trimmed.
+        let followsLiveViewport = yDisp == yBase
         if marginRight > newCols - 1 {
             marginRight = newCols - 1
         }
@@ -809,8 +812,7 @@ public final class Buffer {
                             // scroll up
                             yBase -= 1
                             addToY += 1
-                            if yDisp > 0 {
-                                // Viewport is at the top of the buffer, must increase downwards
+                            if followsLiveViewport && yDisp > 0 {
                                 yDisp -= 1
                             }
                         } else {
@@ -830,7 +832,9 @@ public final class Buffer {
                         } else {
                             // The line is the cursor, scroll down
                             yBase += 1
-                            yDisp += 1
+                            if followsLiveViewport {
+                                yDisp += 1
+                            }
                         }
                     }
                 }
