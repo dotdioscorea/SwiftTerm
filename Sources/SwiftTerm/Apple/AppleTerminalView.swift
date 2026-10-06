@@ -2252,6 +2252,7 @@ extension TerminalView {
             let start, end: Position
 
             func drawSelectionHandle (drawStart: Bool, row: Int) {
+                let multiline = start.row != end.row
                 let lineOffset = calcLineOffset(forRow: row)
                 // lastRow may be the first fully offscreen row. Only clamp a handle
                 // whose endpoint row actually intersects the viewport.
@@ -2275,11 +2276,13 @@ extension TerminalView {
                 let viewportMaxY = frame.height - bounds.minY - 1
                 var location = drawStart ? end : start
                 var above = drawStart
+                var flipped = false
                 // A clamp would move the knob over its own endpoint's glyphs.
                 // Flip to the other side of the row when the preferred side is
                 // outside the viewport, keeping the stem at the true boundary.
                 if drawStart ? location.y + size > viewportMaxY : location.y - size < viewportMinY {
                     above.toggle()
+                    flipped = true
                     location = drawStart ? start : end
                 }
                 var rect = CGRect (origin:
@@ -2293,7 +2296,9 @@ extension TerminalView {
                 context.setLineWidth(1)
                 selectionHandleColor.setFill()
                 selectedTextForegroundColor.withAlphaComponent(selectionHandleColor.cgColor.alpha).setStroke()
-                context.drawPath(using: .fillStroke)
+                // The adjacent row is selected in a multiline range. Leave the
+                // knob hollow there so its fill does not erase those glyphs.
+                context.drawPath(using: flipped && multiline ? .stroke : .fillStroke)
                 context.restoreGState()
             }
             
