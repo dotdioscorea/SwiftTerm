@@ -2267,24 +2267,32 @@ extension TerminalView {
                 
                 context.move(to: end)
                 context.addLine(to: start)
+                context.setLineWidth(2)
+                selectionHandleColor.setStroke()
+                context.strokePath()
                 let size = 12.0
-                let location = drawStart ? end : start
-                
+                let viewportMinY = frame.height - bounds.maxY + 1
+                let viewportMaxY = frame.height - bounds.minY - 1
+                var location = drawStart ? end : start
+                var above = drawStart
+                // A clamp would move the knob over its own endpoint's glyphs.
+                // Flip to the other side of the row when the preferred side is
+                // outside the viewport, keeping the stem at the true boundary.
+                if drawStart ? location.y + size > viewportMaxY : location.y - size < viewportMinY {
+                    above.toggle()
+                    location = drawStart ? start : end
+                }
                 var rect = CGRect (origin:
                                     CGPoint (x: location.x-(size/2.0),
-                                             y: location.y - (drawStart ? 0.0 : size)),
+                                             y: location.y - (above ? 0.0 : size)),
                                    size: CGSize (width: size, height: size))
-                // Handles at the first/last visible row or column otherwise extend outside the
-                // scroll view and are clipped. Keep visible endpoints inside the viewport.
+                // Keep edge columns visible. In a viewport too short to fit a
+                // knob beside the row, let UIKit clip it rather than erase text.
                 rect.origin.x = min(max(rect.minX, bounds.minX + 1), max(bounds.minX + 1, bounds.maxX - size - 1))
-                let viewportMinY = frame.height - bounds.maxY + 1
-                let viewportMaxY = frame.height - bounds.minY - size - 1
-                rect.origin.y = min(max(rect.minY, viewportMinY), max(viewportMinY, viewportMaxY))
                 context.addEllipse(in: rect)
-                context.closePath()
-                context.setLineWidth(2)
-                selectionHandleColor.set ()
-                //TTColor.systemBlue.set ()
+                context.setLineWidth(1)
+                selectionHandleColor.setFill()
+                selectedTextForegroundColor.withAlphaComponent(selectionHandleColor.cgColor.alpha).setStroke()
                 context.drawPath(using: .fillStroke)
                 context.restoreGState()
             }
