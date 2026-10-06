@@ -17,6 +17,18 @@ struct BufferViewportResizeTests {
         }
     }
 
+    @Test func readingNearTheBottomClampsToTheLastValidViewportWhenRowsGrow() {
+        let (terminal, delegate) = TerminalTestHarness.makeTerminal(cols: 80, rows: 15, scrollback: 1000)
+        _ = delegate
+        for index in 0..<100 {
+            terminal.feed(text: "Agent update \(index)\r\n")
+        }
+        terminal.setViewYDisp(terminal.buffer.yBase - 3)
+        terminal.resize(cols: 80, rows: 24)
+        #expect(terminal.buffer.yDisp == terminal.buffer.yBase)
+        #expect(terminal.buffer.yDisp + terminal.buffer.rows <= terminal.buffer.lines.count)
+    }
+
     @Test func liveViewportStillFollowsTheCursorWhenRowsGrowAndShrink() {
         let (terminal, delegate) = TerminalTestHarness.makeTerminal(cols: 80, rows: 15, scrollback: 1000)
         _ = delegate

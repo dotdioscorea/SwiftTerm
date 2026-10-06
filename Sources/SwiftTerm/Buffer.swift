@@ -840,6 +840,10 @@ public final class Buffer {
                 }
             }
 
+            // Growing the viewport can leave a reader closer to the tail than
+            // the new last valid top row. Clamp before trimming and reflow.
+            yDisp = min(yDisp, yBase)
+
             // Reduce max length if needed after adjustments, this is done after as it
             // would otherwise cut data from the bottom of the buffer.
             if newMaxLength < lines.maxLength {
