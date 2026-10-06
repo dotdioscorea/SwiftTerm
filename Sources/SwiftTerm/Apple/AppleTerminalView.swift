@@ -2292,13 +2292,24 @@ extension TerminalView {
                 // Keep edge columns visible. In a viewport too short to fit a
                 // knob beside the row, let UIKit clip it rather than erase text.
                 rect.origin.x = min(max(rect.minX, bounds.minX + 1), max(bounds.minX + 1, bounds.maxX - size - 1))
-                context.addEllipse(in: rect)
-                context.setLineWidth(1)
-                selectionHandleColor.setFill()
-                selectedTextForegroundColor.withAlphaComponent(selectionHandleColor.cgColor.alpha).setStroke()
                 // The adjacent row is selected in a multiline range. Leave the
                 // knob hollow there so its fill does not erase those glyphs.
-                context.drawPath(using: flipped && multiline ? .stroke : .fillStroke)
+                // Two ring colors also keep it visible over unselected cells
+                // when a short range ends to the left of its starting column.
+                if flipped && multiline {
+                    context.setLineWidth(2)
+                    selectionHandleColor.setStroke()
+                    context.strokeEllipse(in: rect)
+                    context.setLineWidth(1)
+                    selectedTextForegroundColor.withAlphaComponent(selectionHandleColor.cgColor.alpha).setStroke()
+                    context.strokeEllipse(in: rect)
+                } else {
+                    context.addEllipse(in: rect)
+                    context.setLineWidth(1)
+                    selectionHandleColor.setFill()
+                    selectedTextForegroundColor.withAlphaComponent(selectionHandleColor.cgColor.alpha).setStroke()
+                    context.drawPath(using: .fillStroke)
+                }
                 context.restoreGState()
             }
             
