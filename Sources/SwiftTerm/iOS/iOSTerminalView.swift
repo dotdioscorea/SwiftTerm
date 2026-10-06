@@ -3275,7 +3275,7 @@ extension TerminalView: UIAccessibilityReadingContent {
 
         let line = terminal.displayBuffer.lines[row]
         let rawLimit = endCol == -1 ? line.count : min(endCol, line.count)
-        let lineLimit = min(rawLimit, line.getTrimmedLength())
+        let lineLimit = min(rawLimit, line.getTrimmedLength(), terminal.cols)
         guard line.hasAnyContent(), lineLimit > 0 else {
             return NSAttributedString(string: "")
         }
@@ -3418,8 +3418,11 @@ extension TerminalView: UIAccessibilityReadingContent {
         guard count > 0, height.isFinite, height > 0,
               bounds.height.isFinite, bounds.height > 0, bounds.minY.isFinite else { return nil }
         let contentHeight = CGFloat(count) * height
-        let top = min(max(0, bounds.minY), max(0, contentHeight - bounds.height))
-        let bottom = min(contentHeight, top + bounds.height)
+        // Intersect the actual viewport with the buffer. A bottom inset may
+        // move the resting viewport farther down than contentHeight - height.
+        let top = max(0, bounds.minY)
+        let bottom = min(contentHeight, bounds.maxY)
+        guard top < bottom else { return nil }
         let first = min(count - 1, Int(floor(top / height)))
         let last = min(count - 1, Int(ceil(bottom / height)) - 1)
         return first...max(first, last)
@@ -3427,19 +3430,19 @@ extension TerminalView: UIAccessibilityReadingContent {
 
     private func accessibilityPositions(for range: ClosedRange<Int>) -> (Position, Position) {
         (Position(col: 0, row: range.lowerBound),
-         Position(col: terminal.displayBuffer.lines[range.upperBound].count, row: range.upperBound))
+         Position(col: min(terminal.cols, terminal.displayBuffer.lines[range.upperBound].count), row: range.upperBound))
     }
 
     public func accessibilityContent(forLineNumber lineNumber: Int) -> String? {
         guard let range = accessibilityLogicalLineRange(for: lineNumber) else { return nil }
         let (start, end) = accessibilityPositions(for: range)
-        return terminal.getDisplayText(start: start, end: end)
+        return accessibilityAttributedDisplayText(start: start, end: end).string
     }
 
     public func accessibilityFrame(forLineNumber lineNumber: Int) -> CGRect {
         guard let window, let range = accessibilityLogicalLineRange(for: lineNumber) else { return .zero }
         let rect = CGRect(x: 0, y: CGFloat(range.lowerBound) * cellDimension.height,
-                          width: CGFloat(terminal.displayBuffer.lines[lineNumber].count) * cellDimension.width,
+                          width: CGFloat(min(terminal.cols, terminal.displayBuffer.lines[lineNumber].count)) * cellDimension.width,
                           height: CGFloat(range.count) * cellDimension.height)
         return window.convert(convert(rect, to: window), to: nil as UIWindow?)
     }
@@ -3447,7 +3450,7 @@ extension TerminalView: UIAccessibilityReadingContent {
     public func accessibilityPageContent() -> String? {
         guard let range = accessibilityVisibleLineRange() else { return nil }
         let (start, end) = accessibilityPositions(for: range)
-        return terminal.getDisplayText(start: start, end: end)
+        return accessibilityAttributedDisplayText(start: start, end: end).string
     }
 
     public func accessibilityAttributedContent(forLineNumber lineNumber: Int) -> NSAttributedString? {
