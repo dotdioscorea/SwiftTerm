@@ -66,8 +66,24 @@ public final class BufferLine: CustomDebugStringConvertible {
     /// changes without diffing individual cells.
     public private(set) var generation: UInt64 = 0
 
+    private struct ResizeOverflow {
+        let cells: [CharData]
+        let marks: [SemanticMark]
+        let generation: UInt64
+    }
+    private var resizeOverflow: ResizeOverflow?
+
+    /// Cursor groups are not reflowed while the application owns their layout.
+    /// Their clipped cells remain private and may return only while untouched.
+    var hasPreservedResizeContent: Bool {
+        resizeOverflow?.generation == generation
+    }
+
     @inline(__always)
-    private func bump() { generation &+= 1 }
+    private func bump() {
+        generation &+= 1
+        resizeOverflow = nil
+    }
 
     public init (cols: Int, fillData: CharData? = nil, isWrapped: Bool = false,
                  bidiState: BidiPresentationState = .default)
@@ -286,11 +302,21 @@ public final class BufferLine: CustomDebugStringConvertible {
     /// `fillData` values, if it is smaller, the data is trimmed
     public func resize (cols: Int, fillData: CharData)
     {
+        _ = resize(cols: cols, fillData: fillData, preserveContent: false)
+    }
+
+    /// Returns true when widening restored clipped cells in this pass. The
+    /// owning buffer must keep their wrap group out of that pass's reflow.
+    @discardableResult
+    func resize(cols: Int, fillData: CharData, preserveContent: Bool) -> Bool {
         let len = dataSize
         if len == cols {
-            return
+            return false
         }
-        defer { bump() }
+        let previous = hasPreservedResizeContent ? resizeOverflow : nil
+        let originalMarks = previous?.marks ?? semanticMarks
+        var remaining: [CharData] = []
+        var restored = false
 
         if cols > len {
             let newBuf = UnsafeMutableBufferPointer<CharData>.allocate(capacity: cols)
@@ -312,10 +338,27 @@ public final class BufferLine: CustomDebugStringConvertible {
             for i in len..<cols {
                 newBuf.initializeElement(at: i, to: fillData)
             }
+            if let previous {
+                let count = min(previous.cells.count, cols - len)
+                for i in 0..<count {
+                    newBuf[len + i] = previous.cells[i]
+                }
+                remaining = Array(previous.cells.dropFirst(count))
+                restored = count > 0
+            }
+            data.deinitialize()
             data.deallocate()
             data = newBuf
             dataSize = cols
         } else {
+            if preserveContent {
+                let clipped = Array(data[cols..<len])
+                let older = previous?.cells ?? []
+                if !older.isEmpty || (cols..<len).contains(where: hasContent)
+                    || originalMarks.contains(where: { $0.column >= cols }) {
+                    remaining = clipped + older
+                }
+            }
             if cols > 0 {
                 let newBuf = UnsafeMutableBufferPointer<CharData>.allocate(capacity: cols)
 #if os(Linux) || os(Windows)
@@ -335,8 +378,16 @@ public final class BufferLine: CustomDebugStringConvertible {
                 data = UnsafeMutableBufferPointer<CharData>.allocate(capacity: 0)
                 dataSize = 0
             }
-            marksClampTo(width: cols)
         }
+        if restored {
+            semanticMarks = originalMarks
+        }
+        marksClampTo(width: cols)
+        bump()
+        if !remaining.isEmpty {
+            resizeOverflow = ResizeOverflow(cells: remaining, marks: originalMarks, generation: generation)
+        }
+        return restored
     }
 
     /// Fills the entire bufferline with the specified ``CharData``
