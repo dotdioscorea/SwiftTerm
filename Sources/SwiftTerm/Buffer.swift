@@ -774,6 +774,7 @@ public final class Buffer {
     
     public func resize (newCols : Int, newRows : Int)
     {
+        var restoredLines = Set<ObjectIdentifier>()
         // Row-count changes move the live viewport with the cursor. A reader in
         // scrollback must keep the same top line unless history itself is trimmed.
         let followsLiveViewport = yDisp == yBase
@@ -800,7 +801,10 @@ public final class Buffer {
                 // are created on demand at the buffer's current cols, so they never
                 // need resizing here.
                 for i in 0..<lines.count {
-                    lines [i].resize (cols: newCols, fillData: CharData.Null)
+                    let line = lines[i]
+                    if line.resize(cols: newCols, fillData: CharData.Null, preserveContent: false) {
+                        restoredLines.insert(ObjectIdentifier(line))
+                    }
                 }
 
             }
@@ -884,13 +888,23 @@ public final class Buffer {
         }
         
         if isReflowEnabled {
-            reflow (newCols, newRows)
+            let preservedLines = resizeProtectedLines(restored: restoredLines)
+            reflow (newCols, newRows, protectedLines: preservedLines)
             // Trim the end of the line off if cols shrunk
             if cols > newCols {
                 // lines.count, not lines.maxLength (see the widen loop above).
                 for i in 0..<lines.count {
-                    lines [i].resize (cols: newCols, fillData: CharData.Null)
+                    let line = lines[i]
+                    line.resize(cols: newCols, fillData: CharData.Null,
+                                preserveContent: preservedLines.contains(ObjectIdentifier(line)))
                 }
+            }
+        } else if cols > newCols {
+            // Alternate screens keep their program-owned layout without reflow.
+            // Keep only the visible cells in the row, so a narrow clear/redraw
+            // invalidates its private tail instead of revealing stale cells later.
+            for i in 0..<lines.count {
+                lines[i].resize(cols: newCols, fillData: CharData.Null, preserveContent: true)
             }
         }
         
@@ -910,6 +924,27 @@ public final class Buffer {
         }
         rows = newRows
         cols = newCols
+    }
+
+    /// Capture line identities before reflow moves other groups. A protected
+    /// group keeps its application-owned layout until its clipped cells are
+    /// restored or replaced by new output.
+    private func resizeProtectedLines(restored: Set<ObjectIdentifier>) -> Set<ObjectIdentifier> {
+        var result = restored
+        let cursorRow = yBase + y
+        var first = 0
+        while first < lines.count {
+            var end = first + 1
+            while end < lines.count && lines[end].isWrapped { end += 1 }
+            let pinned = (first..<end).contains(cursorRow) || (first..<end).contains {
+                lines[$0].hasPreservedResizeContent || restored.contains(ObjectIdentifier(lines[$0]))
+            }
+            if pinned {
+                for row in first..<end { result.insert(ObjectIdentifier(lines[row])) }
+            }
+            first = end
+        }
+        return result
     }
     
     /// Removes the scrollback history (the lines above the visible screen)
@@ -1118,7 +1153,8 @@ public final class Buffer {
         return cols
     }
 
-    func getLinesToRemove (oldCols: Int, newCols: Int, bufferAbsoluteY: Int, nullChar: CharData) -> [Int]
+    func getLinesToRemove (oldCols: Int, newCols: Int, bufferAbsoluteY: Int, nullChar: CharData,
+                           protectedLines: Set<ObjectIdentifier> = []) -> [Int]
     {
         // Gather all BufferLines that need to be removed from the Buffer here so that they can be
         // batched up and only committed once
@@ -1146,7 +1182,8 @@ public final class Buffer {
 
             // If these lines contain the cursor don't touch them, the program will handle fixing up wrapped
             // lines with the cursor
-            if bufferAbsoluteY >= y && bufferAbsoluteY < i {
+            if (bufferAbsoluteY >= y && bufferAbsoluteY < i)
+                || wrappedLines.contains(where: { protectedLines.contains(ObjectIdentifier($0)) }) {
                 y += wrappedLines.count - 1
                 continue
             }
@@ -1217,9 +1254,11 @@ public final class Buffer {
         return toRemove
     }
     
-    func reflowWider (_ oldCols: Int, _ oldRows: Int, _ newCols: Int, _ newRows: Int)
+    func reflowWider (_ oldCols: Int, _ oldRows: Int, _ newCols: Int, _ newRows: Int,
+                     protectedLines: Set<ObjectIdentifier> = [])
     {
-        let toRemove = getLinesToRemove(oldCols: oldCols, newCols: newCols, bufferAbsoluteY: yBase + y, nullChar: CharData.Null)
+        let toRemove = getLinesToRemove(oldCols: oldCols, newCols: newCols, bufferAbsoluteY: yBase + y,
+                                       nullChar: CharData.Null, protectedLines: protectedLines)
         
         //print ("Lines to remove: \(toRemove) \(toRemove.count)")
         if toRemove.count > 0 {
@@ -1346,7 +1385,8 @@ public final class Buffer {
         public static func Null () -> InsertionSet { InsertionSet (lines: [], start: 0, isNull: true) }
     }
     
-    func reflowNarrower (_ oldCols: Int, _ oldRows: Int, _ newCols: Int, _ newRows: Int)
+    func reflowNarrower (_ oldCols: Int, _ oldRows: Int, _ newCols: Int, _ newRows: Int,
+                       protectedLines: Set<ObjectIdentifier> = [])
     {
         // Gather all BufferLines that need to be inserted into the Buffer here so that they can be
         // batched up and only committed once
@@ -1377,7 +1417,8 @@ public final class Buffer {
             // wrapped lines with the cursor
             let absoluteY = yBase + self.y
 
-            if absoluteY >= y && absoluteY < y + wrappedLines.count {
+            if (absoluteY >= y && absoluteY < y + wrappedLines.count)
+                || wrappedLines.contains(where: { protectedLines.contains(ObjectIdentifier($0)) }) {
                 continue
             }
 
@@ -1541,7 +1582,7 @@ public final class Buffer {
         }
     }
     
-    func reflow (_ newCols: Int, _ newRows: Int)
+    func reflow (_ newCols: Int, _ newRows: Int, protectedLines: Set<ObjectIdentifier> = [])
     {
         if cols == newCols {
             return
@@ -1549,9 +1590,9 @@ public final class Buffer {
         // iterate through rows, ignore the last one as it cannot be wrapped
 
         if newCols > cols {
-            reflowWider (cols, rows, newCols, newRows)
+            reflowWider (cols, rows, newCols, newRows, protectedLines: protectedLines)
         } else {
-            reflowNarrower (cols, rows, newCols, newRows)
+            reflowNarrower (cols, rows, newCols, newRows, protectedLines: protectedLines)
         }
         recalculateLinesWithImagesCount()
     }
