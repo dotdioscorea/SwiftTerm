@@ -1604,12 +1604,8 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     func updateScroller ()
     {
         let displayBuffer = terminal.displayBuffer
-        // Resizing an alternate buffer can retain padding rows. They are not
-        // scrollback and must not shift a full-screen application's viewport.
-        let contentRows = terminal.isDisplayBufferAlternate
-            ? min(displayBuffer.lines.count, displayBuffer.rows) : displayBuffer.lines.count
         contentSize = CGSize (width: CGFloat (displayBuffer.cols) * cellDimension.width,
-                              height: CGFloat (contentRows) * cellDimension.height)
+                              height: CGFloat (displayBuffer.lines.count) * cellDimension.height)
         // Let the gesture own contentOffset while the finger is physically down
         // (isTracking), and while frozen history coasts under momentum —
         // re-asserting it there fights the drag and blocks the user from reaching
@@ -1663,7 +1659,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     }
 
     private func maxDisplayRow(in displayBuffer: Buffer) -> Int {
-        terminal.isDisplayBufferAlternate ? 0 : max(0, displayBuffer.lines.count - displayBuffer.rows)
+        max(0, displayBuffer.lines.count - displayBuffer.rows)
     }
 
     /// The largest resting `contentOffset.y` the scroll view can actually reach.
@@ -1676,7 +1672,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     /// shifts, and ignoring it left the user unable to ever reach the bottom to
     /// disengage the freeze — even by overscrolling.
     private func maxContentOffsetY() -> CGFloat {
-        max(0, contentSize.height - bounds.height + adjustedContentInset.bottom)
+        // Insets alone are not history. Keep a full-screen or unscrolled
+        // terminal at row zero instead of shifting its top rows out of view.
+        guard maxDisplayRow(in: terminal.displayBuffer) > 0 else { return 0 }
+        return max(0, contentSize.height - bounds.height + adjustedContentInset.bottom)
     }
 
     private func setContentOffsetFromTerminal(_ newContentOffset: CGPoint) {
