@@ -784,7 +784,10 @@ public final class Buffer {
             marginLeft = marginRight
         }
         let newMaxLength = getCorrectBufferLength(newRows)
-        if newMaxLength > lines.maxLength {
+        // An unused alternate buffer is empty during normal-screen resizing.
+        // Shrink its capacity now too; otherwise its first scroll can append
+        // rows past the new viewport and create invalid alternate scrollback.
+        if newMaxLength > lines.maxLength || lines.isEmpty {
             lines.maxLength = newMaxLength
         }
         if lines.count > 0 {
