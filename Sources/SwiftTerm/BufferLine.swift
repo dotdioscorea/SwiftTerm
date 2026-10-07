@@ -139,6 +139,19 @@ public final class BufferLine: CustomDebugStringConvertible {
         Array(data[0..<dataSize])
     }
 
+    /// Payload collection must retain private resize cells too. They are not
+    /// visible to readers, but can return while this row remains untouched.
+    func insertPayloadCodes(into used: inout Set<UInt16>) {
+        for cell in data[0..<dataSize] where cell.payload.code != 0 {
+            used.insert(cell.payload.code)
+        }
+        if let overflow = resizeOverflow, overflow.generation == generation {
+            for cell in overflow.cells where cell.payload.code != 0 {
+                used.insert(cell.payload.code)
+            }
+        }
+    }
+
     /// Accesses the CharIndex at the specified position
     public subscript (index : Int /*, callingMethod: String = #function */) -> CharData {
         get {

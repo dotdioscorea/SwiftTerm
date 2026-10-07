@@ -6317,14 +6317,7 @@ open class Terminal {
         for buffer in [normalBuffer, altBuffer] {
             // TODO use a better system than this ugly nest
             for line in buffer.lines.getArray() {
-                if let array = line?.getData() {
-                    for data in array {
-                        let code = data.payload.code
-                        if code > 0 {
-                            used.insert(code)
-                        }
-                    }
-                }
+                line?.insertPayloadCodes(into: &used)
             }
         }
         
