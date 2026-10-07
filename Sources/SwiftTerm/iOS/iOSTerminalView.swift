@@ -1604,8 +1604,12 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     func updateScroller ()
     {
         let displayBuffer = terminal.displayBuffer
+        // Resizing an alternate buffer can retain padding rows. They are not
+        // scrollback and must not shift a full-screen application's viewport.
+        let contentRows = terminal.isDisplayBufferAlternate
+            ? min(displayBuffer.lines.count, displayBuffer.rows) : displayBuffer.lines.count
         contentSize = CGSize (width: CGFloat (displayBuffer.cols) * cellDimension.width,
-                              height: CGFloat (displayBuffer.lines.count) * cellDimension.height)
+                              height: CGFloat (contentRows) * cellDimension.height)
         // Let the gesture own contentOffset while the finger is physically down
         // (isTracking), and while frozen history coasts under momentum —
         // re-asserting it there fights the drag and blocks the user from reaching
@@ -1659,7 +1663,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     }
 
     private func maxDisplayRow(in displayBuffer: Buffer) -> Int {
-        max(0, displayBuffer.lines.count - displayBuffer.rows)
+        terminal.isDisplayBufferAlternate ? 0 : max(0, displayBuffer.lines.count - displayBuffer.rows)
     }
 
     /// The largest resting `contentOffset.y` the scroll view can actually reach.
