@@ -899,6 +899,13 @@ public final class Buffer {
                                 preserveContent: preservedLines.contains(ObjectIdentifier(line)))
                 }
             }
+        } else if cols > newCols {
+            // Alternate screens keep their program-owned layout without reflow.
+            // Keep only the visible cells in the row, so a narrow clear/redraw
+            // invalidates its private tail instead of revealing stale cells later.
+            for i in 0..<lines.count {
+                lines[i].resize(cols: newCols, fillData: CharData.Null, preserveContent: true)
+            }
         }
         
         // DEBUG: Post-condition
