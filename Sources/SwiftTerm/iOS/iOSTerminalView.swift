@@ -1622,7 +1622,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             return
         }
         let rowOffset = CGFloat (displayBuffer.yDisp) * cellDimension.height
-        let desiredY = userScrolling ? rowOffset + manualScrollOffsetWithinRow : rowOffset
+        let desiredY = userScrolling ? rowOffset + manualScrollOffsetWithinRow : maxContentOffsetY()
         // Clamp to the scroll view's real maximum so following the bottom rests
         // flush against the last line instead of over-scrolling past it.
         let offsetY = min(desiredY, maxContentOffsetY())
@@ -1703,8 +1703,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
         let displayBuffer = terminal.displayBuffer
         terminal.setViewYDisp(maxDisplayRow(in: displayBuffer))
-        let bottomOffset = min(CGFloat(displayBuffer.yDisp) * cellDimension.height, maxContentOffsetY())
-        setContentOffsetFromTerminal(CGPoint(x: 0, y: bottomOffset))
+        setContentOffsetFromTerminal(CGPoint(x: 0, y: maxContentOffsetY()))
     }
 
     private func syncYDispFromContentOffset() {
@@ -1744,7 +1743,12 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             return
         }
 
-        let row = max(0, min(maxRow, Int(floor((offsetY + contentOffsetTolerance) / cellDimension.height))))
+        setHistoryScrollPosition(offsetY, in: displayBuffer)
+    }
+
+    private func setHistoryScrollPosition(_ offsetY: CGFloat, in displayBuffer: Buffer) {
+        let row = max(0, min(maxDisplayRow(in: displayBuffer),
+                            Int(floor((offsetY + contentOffsetTolerance) / cellDimension.height))))
         manualScrollOffsetWithinRow = offsetY - CGFloat(row) * cellDimension.height
         if displayBuffer.yDisp != row {
             terminal.setViewYDisp(row)
@@ -1845,8 +1849,10 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     }
 
     open override func accessibilityScroll(_ direction: UIAccessibilityScrollDirection) -> Bool {
+        guard terminal != nil, cellDimension.height.isFinite, cellDimension.height > 0,
+              bounds.height.isFinite, bounds.height > 0, contentOffset.y.isFinite else { return false }
         let pageHeight = max(bounds.height, cellDimension.height)
-        let maxOffsetY = max(0, contentSize.height - bounds.height)
+        let maxOffsetY = maxContentOffsetY()
         let targetOffsetY: CGFloat
 
         switch direction {
@@ -1858,11 +1864,21 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             return super.accessibilityScroll(direction)
         }
 
-        guard targetOffsetY != contentOffset.y else {
+        guard abs(targetOffsetY - contentOffset.y) > contentOffsetTolerance else {
             return false
         }
 
-        setContentOffset(CGPoint(x: contentOffset.x, y: targetOffsetY), animated: false)
+        // Accessibility paging is an intentional history scroll even though no
+        // finger is tracking. Update both terminal and view state before moving
+        // the viewport so incoming output cannot pull the reader to the tail.
+        let displayBuffer = terminal.displayBuffer
+        if targetOffsetY >= maxOffsetY - contentOffsetTolerance {
+            terminal.setViewYDisp(maxDisplayRow(in: displayBuffer))
+            setManualScrolling(false)
+        } else {
+            setHistoryScrollPosition(targetOffsetY, in: displayBuffer)
+        }
+        setContentOffsetFromTerminal(CGPoint(x: contentOffset.x, y: targetOffsetY))
         setNeedsDisplay(bounds)
         // Based on WWDC 2019 presentation: argument is nil
         UIAccessibility.post(notification: .pageScrolled, argument: nil)
