@@ -388,6 +388,7 @@ open class Terminal {
     private let synchronizedOutputTimeoutSeconds: TimeInterval = 1.0
     public private(set) var synchronizedOutputActive: Bool = false
     private var synchronizedOutputTimeoutItem: DispatchWorkItem?
+    private var synchronizedOutputNeedsBufferActivation = false
 
     var displayBuffer: Buffer {
         buffer
@@ -3325,13 +3326,22 @@ open class Terminal {
             clearAllKittyImages()
             updateRange (0)
         case 3:
-            // Clear scrollback (everything not in viewport)
-            let scrollBackSize = buffer.lines.count - rows
+            // Erase saved lines while preserving the active grid and saved cursor.
+            let scrollBackSize = buffer.yBase
             if scrollBackSize > 0 {
                 buffer.lines.trimStart (count: scrollBackSize)
                 buffer.linesTop = 0
-                buffer.yBase = max (buffer.yBase - scrollBackSize, 0)
-                buffer.yDisp = max (buffer.yDisp - scrollBackSize, 0)
+                buffer.yBase = 0
+                buffer.yDisp = 0
+                refresh (startRow: 0, endRow: rows-1)
+                // The retained viewport no longer exists. Reconcile native scroll
+                // geometry and follow state, just as a full buffer reset does.
+                if synchronizedOutputActive {
+                    // Keep the presented scroll geometry stable until this frame commits.
+                    synchronizedOutputNeedsBufferActivation = true
+                } else {
+                    tdel?.bufferActivated (source: self)
+                }
             }
             break;
         default:
@@ -6815,6 +6825,10 @@ open class Terminal {
         synchronizedOutputTimeoutItem?.cancel()
         synchronizedOutputTimeoutItem = nil
         refresh (startRow: 0, endRow: rows - 1)
+        if synchronizedOutputNeedsBufferActivation {
+            synchronizedOutputNeedsBufferActivation = false
+            tdel?.bufferActivated (source: self)
+        }
         tdel?.synchronizedOutputChanged(source: self, active: false)
     }
 
