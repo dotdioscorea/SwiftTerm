@@ -20,9 +20,25 @@ struct ResetScrollAreaTests {
         terminal.feed(text: "\u{1b}[3J")
         #expect(TerminalTestHarness.visibleLinesText(buffer: terminal.buffer) == active)
         #expect(terminal.buffer.lines.count == terminal.rows)
+        #expect(terminal.buffer.yBase == 0)
+        #expect(terminal.buffer.yDisp == 0)
         #expect(delegate.bufferActivatedCount == before + 1)
         terminal.feed(text: "\u{1b}[1;1H\u{1b}8")
         TerminalTestHarness.assertCursor(terminal.buffer, col: 6, row: 1)
+    }
+
+    @Test("ED3 defers native buffer changes until a synchronized frame completes")
+    func savedLineEraseDuringSynchronizedOutputDefersDelegate() {
+        let (terminal, delegate) = TerminalTestHarness.makeTerminal(cols: 20, rows: 3, scrollback: 500)
+        terminal.feed(text: "old1\r\nold2\r\nactive1\r\nactive2\r\nactive3")
+        let before = delegate.bufferActivatedCount
+        terminal.feed(text: "\u{1b}[?2026h\u{1b}[3J")
+        #expect(terminal.synchronizedOutputActive)
+        #expect(terminal.buffer.yBase == 0)
+        #expect(delegate.bufferActivatedCount == before)
+        terminal.feed(text: "\u{1b}[?2026l")
+        #expect(!terminal.synchronizedOutputActive)
+        #expect(delegate.bufferActivatedCount == before + 1)
     }
 
     @Test("ED3 without saved lines leaves the alternate screen and normal history intact")
