@@ -41,6 +41,32 @@ struct ResetScrollAreaTests {
         #expect(delegate.bufferActivatedCount == before + 1)
     }
 
+    @Test("Resetting after a synchronized erase cannot notify during a later clean frame")
+    func resetDoesNotLeakPendingSavedLineErase() {
+        for reset in ["\u{1b}c", "\u{1b}[!p"] {
+            let (terminal, delegate) = TerminalTestHarness.makeTerminal(cols: 20, rows: 3, scrollback: 500)
+            terminal.feed(text: "old1\r\nold2\r\nactive1\r\nactive2\r\nactive3")
+            terminal.feed(text: "\u{1b}[?2026h\u{1b}[3J" + reset + "\u{1b}[?2026l")
+            #expect(!terminal.synchronizedOutputActive)
+            let before = delegate.bufferActivatedCount
+            terminal.feed(text: "\u{1b}[?2026hClean frame\u{1b}[?2026l")
+            #expect(delegate.bufferActivatedCount == before)
+        }
+    }
+
+    @Test("Repeated saved-line erases notify once and empty erases notify zero times")
+    func synchronizedSavedLineEraseNotificationIsBounded() {
+        for withHistory in [false, true] {
+            let (terminal, delegate) = TerminalTestHarness.makeTerminal(cols: 20, rows: 3, scrollback: 500)
+            if withHistory {
+                terminal.feed(text: "old1\r\nold2\r\nactive1\r\nactive2\r\nactive3")
+            }
+            let before = delegate.bufferActivatedCount
+            terminal.feed(text: "\u{1b}[?2026h\u{1b}[3J\u{1b}[3J\u{1b}[?2026l")
+            #expect(delegate.bufferActivatedCount == before + (withHistory ? 1 : 0))
+        }
+    }
+
     @Test("ED3 without saved lines leaves the alternate screen and normal history intact")
     func savedLineEraseOnAlternateScreenIsANoop() {
         let (terminal, delegate) = TerminalTestHarness.makeTerminal(cols: 20, rows: 3, scrollback: 500)
