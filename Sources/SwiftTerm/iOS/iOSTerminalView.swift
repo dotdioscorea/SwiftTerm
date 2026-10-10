@@ -2011,6 +2011,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         // UIKit already owns ordinary keyboard edits. Our normalization and accessory
         // edits are external changes and must still invalidate its text context.
         performTextInputEdit(notifyingDelegate: origin == .accessory || textToInsert != text) {
+            let rangeToReplace = _markedTextRange ?? _selectedTextRange
             let rangeStartIndex = rangeToReplace.startPosition.offset
             textInputStorage.replaceSubrange(rangeToReplace.fullRange(in: textInputStorage), with: textToInsert)
             _markedTextRange = nil
