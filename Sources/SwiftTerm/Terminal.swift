@@ -388,6 +388,7 @@ open class Terminal {
     private let synchronizedOutputTimeoutSeconds: TimeInterval = 1.0
     public private(set) var synchronizedOutputActive: Bool = false
     private var synchronizedOutputTimeoutItem: DispatchWorkItem?
+    private var synchronizedOutputNeedsBufferActivation = false
 
     var displayBuffer: Buffer {
         buffer
@@ -3335,7 +3336,12 @@ open class Terminal {
                 refresh (startRow: 0, endRow: rows-1)
                 // The retained viewport no longer exists. Reconcile native scroll
                 // geometry and follow state, just as a full buffer reset does.
-                tdel?.bufferActivated (source: self)
+                if synchronizedOutputActive {
+                    // Keep the presented scroll geometry stable until this frame commits.
+                    synchronizedOutputNeedsBufferActivation = true
+                } else {
+                    tdel?.bufferActivated (source: self)
+                }
             }
             break;
         default:
@@ -6819,6 +6825,10 @@ open class Terminal {
         synchronizedOutputTimeoutItem?.cancel()
         synchronizedOutputTimeoutItem = nil
         refresh (startRow: 0, endRow: rows - 1)
+        if synchronizedOutputNeedsBufferActivation {
+            synchronizedOutputNeedsBufferActivation = false
+            tdel?.bufferActivated (source: self)
+        }
         tdel?.synchronizedOutputChanged(source: self, active: false)
     }
 
