@@ -116,16 +116,27 @@ extension TerminalView: UITextInput {
         return TextRange(from: start, to: end)
     }
 
-    func beginTextInputEdit() {
-        uitiLog("beginTextInputEdit \(textInputStateDescription())")
-        inputDelegate?.selectionWillChange(self)
-        inputDelegate?.textWillChange(self)
-    }
-
-    func endTextInputEdit() {
-        inputDelegate?.textDidChange(self)
-        inputDelegate?.selectionDidChange(self)
-        uitiLog("endTextInputEdit \(textInputStateDescription())")
+    // UITextInputDelegate reports changes made outside the text input system.
+    // Keep one delegate for each pair; coalesce notifications inside an external edit.
+    func performTextInputEdit(
+        notifyingDelegate notify: Bool = true,
+        changingText: Bool = true,
+        _ edit: () -> Void
+    ) {
+        let delegate = notify && textInputNotificationDepth == 0 ? inputDelegate : nil
+        if notify { textInputNotificationDepth += 1 }
+        defer {
+            if let delegate {
+                if changingText { delegate.textDidChange(self) }
+                delegate.selectionDidChange(self)
+            }
+            if notify { textInputNotificationDepth -= 1 }
+        }
+        if let delegate {
+            delegate.selectionWillChange(self)
+            if changingText { delegate.textWillChange(self) }
+        }
+        edit()
     }
 
     public func text(in range: UITextRange) -> String? {
@@ -148,8 +159,6 @@ extension TerminalView: UITextInput {
         resetKoreanResyllabificationTransaction()
         uitiLog ("replace(range:\(r), withText:\(text.debugDescription)) \(textInputStateDescription())")
 
-        beginTextInputEdit()
-
         // Send the edits to the terminal
         // Delete the old by sending as many backspaces as needed
         let oldText = textInputStorage[r.fullRange(in: textInputStorage)]
@@ -161,30 +170,30 @@ extension TerminalView: UITextInput {
             replacementText = normalized
         }
         let backspaces = oldText.count
+        performTextInputEdit(notifyingDelegate: replacementText != text) {
+            let insertionIndex = r.startPosition.offset
+            textInputStorage.replaceSubrange(r.fullRange(in: textInputStorage), with: replacementText)
+            let replacementLength = replacementText.textInputUTF16Count
+            if r.endPosition.offset <= _selectedTextRange.startPosition.offset {
+                let selectionOffset = _selectedTextRange.startPosition.offset - insertionIndex
+                let newSelectionOffset = selectionOffset - r.length + replacementLength
+                let newSelectionIndex = textInputStorage.textInputValidUTF16Offset(newSelectionOffset + insertionIndex, rounding: .forward)
+                let newSelectionEndIndex = textInputStorage.textInputValidUTF16Offset(newSelectionIndex + _selectedTextRange.length, rounding: .forward)
+                _selectedTextRange = TextRange(from: TextPosition(offset:newSelectionIndex),
+                                                to: TextPosition(offset: newSelectionEndIndex))
+            } else if r.startPosition.offset >= _selectedTextRange.endPosition.offset {
+                // NOOP
+            } else {
+                let insertionEndIndex = textInputStorage.textInputValidUTF16Offset(insertionIndex + replacementLength, rounding: .forward)
+                let insertionEndPosition = TextPosition(offset: insertionEndIndex)
+                _selectedTextRange = TextRange(from: insertionEndPosition,  to: insertionEndPosition)
+            }
+        }
+
         for _ in 0..<backspaces {
             self.send ([0x7f])
         }
         self.send (txt: replacementText)
-
-        let insertionIndex = r.startPosition.offset
-        textInputStorage.replaceSubrange(r.fullRange(in: textInputStorage), with: replacementText)
-        let replacementLength = replacementText.textInputUTF16Count
-        if r.endPosition.offset <= _selectedTextRange.startPosition.offset {
-            let selectionOffset = _selectedTextRange.startPosition.offset - insertionIndex
-            let newSelectionOffset = selectionOffset - r.length + replacementLength
-            let newSelectionIndex = textInputStorage.textInputValidUTF16Offset(newSelectionOffset + insertionIndex, rounding: .forward)
-            let newSelectionEndIndex = textInputStorage.textInputValidUTF16Offset(newSelectionIndex + _selectedTextRange.length, rounding: .forward)
-            _selectedTextRange = TextRange(from: TextPosition(offset:newSelectionIndex), 
-                                            to: TextPosition(offset: newSelectionEndIndex))
-        } else if r.startPosition.offset >= _selectedTextRange.endPosition.offset {
-            // NOOP
-        } else {
-            let insertionEndIndex = textInputStorage.textInputValidUTF16Offset(insertionIndex + replacementLength, rounding: .forward)
-            let insertionEndPosition = TextPosition(offset: insertionEndIndex)
-            _selectedTextRange = TextRange(from: insertionEndPosition,  to: insertionEndPosition)
-        }
-
-        endTextInputEdit()
     }
 
     /*
@@ -197,23 +206,27 @@ extension TerminalView: UITextInput {
             return _selectedTextRange
         }
         set {
-            guard let newValue else {
-                uitiLog("selectedTextRange -> nil (ignored) \(textInputStateDescription())")
-                return
-            }
-            guard let nv = coerceTextRange(newValue) else {
-                uitiLog("selectedTextRange -> unsupported range \(type(of: newValue)) \(textInputStateDescription())")
-                return
-            }
-            let isSame = _selectedTextRange.startPosition.offset == nv.startPosition.offset &&
-                _selectedTextRange.endPosition.offset == nv.endPosition.offset
-            if isSame {
-                return
-            }
-            inputDelegate?.selectionWillChange(self)
+            setTextInputSelection(newValue, notifyingDelegate: false)
+        }
+    }
+
+    func setTextInputSelection(_ newValue: UITextRange?, notifyingDelegate: Bool) {
+        guard let newValue else {
+            uitiLog("selectedTextRange -> nil (ignored) \(textInputStateDescription())")
+            return
+        }
+        guard let nv = coerceTextRange(newValue) else {
+            uitiLog("selectedTextRange -> unsupported range \(type(of: newValue)) \(textInputStateDescription())")
+            return
+        }
+        let isSame = _selectedTextRange.startPosition.offset == nv.startPosition.offset &&
+            _selectedTextRange.endPosition.offset == nv.endPosition.offset
+        if isSame {
+            return
+        }
+        performTextInputEdit(notifyingDelegate: notifyingDelegate, changingText: false) {
             _selectedTextRange = nv
             uitiLog ("selectedTextRange -> \(_selectedTextRange)")
-            inputDelegate?.selectionDidChange(self)
         }
     }
     
@@ -253,43 +266,41 @@ extension TerminalView: UITextInput {
         let rangeToReplace = _markedTextRange ?? _selectedTextRange
         let rangeStartPosition = rangeToReplace.startPosition
 
-        beginTextInputEdit()
+        performTextInputEdit(notifyingDelegate: false) {
+            if let newText = markedText {
+                textInputStorage.replaceSubrange(rangeToReplace.fullRange(in: textInputStorage), with: newText)
+                // Figure out the new selection range
+                let rangeStartIndex = rangeStartPosition.offset
+                let newTextLength = newText.textInputUTF16Count
+                let selectedStartInNewText = max(0, min(selectedRange.location, newTextLength))
+                let selectedRangeLength = max(0, min(selectedRange.length, newTextLength - selectedStartInNewText))
+                let selectedEndInNewText = selectedStartInNewText + selectedRangeLength
 
-        if let newText = markedText {
-            textInputStorage.replaceSubrange(rangeToReplace.fullRange(in: textInputStorage), with: newText)
-            // Figure out the new selection range
-            let rangeStartIndex = rangeStartPosition.offset
-            let newTextLength = newText.textInputUTF16Count
-            let selectedStartInNewText = max(0, min(selectedRange.location, newTextLength))
-            let selectedRangeLength = max(0, min(selectedRange.length, newTextLength - selectedStartInNewText))
-            let selectedEndInNewText = selectedStartInNewText + selectedRangeLength
-
-            let selectionStartIndex = textInputStorage.textInputValidUTF16Offset(
-                rangeStartIndex + selectedStartInNewText,
-                rounding: selectedRangeLength == 0 ? .forward : .backward)
-            let selectionEndIndex = textInputStorage.textInputValidUTF16Offset(rangeStartIndex + selectedEndInNewText, rounding: .forward)
-            _markedTextRange = TextRange(from: rangeStartPosition, maxOffset: newTextLength, in: textInputStorage)
-            _selectedTextRange = TextRange(from: TextPosition(offset: selectionStartIndex), 
-                                           to: TextPosition(offset: selectionEndIndex))
-        } else {
-            textInputStorage.removeSubrange(rangeToReplace.fullRange(in: textInputStorage))
-            _markedTextRange = nil
-            _selectedTextRange = TextRange(from: rangeStartPosition, to: rangeStartPosition)
+                let selectionStartIndex = textInputStorage.textInputValidUTF16Offset(
+                    rangeStartIndex + selectedStartInNewText,
+                    rounding: selectedRangeLength == 0 ? .forward : .backward)
+                let selectionEndIndex = textInputStorage.textInputValidUTF16Offset(rangeStartIndex + selectedEndInNewText, rounding: .forward)
+                _markedTextRange = TextRange(from: rangeStartPosition, maxOffset: newTextLength, in: textInputStorage)
+                _selectedTextRange = TextRange(from: TextPosition(offset: selectionStartIndex),
+                                               to: TextPosition(offset: selectionEndIndex))
+            } else {
+                textInputStorage.removeSubrange(rangeToReplace.fullRange(in: textInputStorage))
+                _markedTextRange = nil
+                _selectedTextRange = TextRange(from: rangeStartPosition, to: rangeStartPosition)
+            }
         }
-
-        endTextInputEdit()
     }
 
     func resetInputBuffer (_ loc: String = #function)
     {
         uitiLog("resetInputBuffer() from \(loc) \(textInputStateDescription())")
-        beginTextInputEdit()
-        pendingAutoPeriodDeleteWasSpace = false
-        resetKoreanResyllabificationTransaction()
-        textInputStorage = ""
-        _selectedTextRange = TextRange (from: TextPosition(offset: 0), to: TextPosition(offset: 0))
-        _markedTextRange = nil
-        endTextInputEdit()
+        performTextInputEdit(notifyingDelegate: true) {
+            pendingAutoPeriodDeleteWasSpace = false
+            resetKoreanResyllabificationTransaction()
+            textInputStorage = ""
+            _selectedTextRange = TextRange (from: TextPosition(offset: 0), to: TextPosition(offset: 0))
+            _markedTextRange = nil
+        }
     }
     
     public func unmarkText() {
@@ -303,11 +314,11 @@ extension TerminalView: UITextInput {
                     return
                 }
             }
-            beginTextInputEdit()
-            let rangeEndPosition = previouslyMarkedRange.endPosition
-            _selectedTextRange = TextRange(from: rangeEndPosition, to: rangeEndPosition)
-            _markedTextRange = nil
-            endTextInputEdit()
+            performTextInputEdit(notifyingDelegate: false) {
+                let rangeEndPosition = previouslyMarkedRange.endPosition
+                _selectedTextRange = TextRange(from: rangeEndPosition, to: rangeEndPosition)
+                _markedTextRange = nil
+            }
         }        
     }
     
@@ -478,14 +489,14 @@ extension TerminalView: UITextInput {
                 data = terminal.applicationCursor ? EscapeSequences.moveLeftApp : EscapeSequences.moveLeftNormal
                 // Update the carret to the new position so that deleteBackward will delete the correct character
                 let newOffset = textInputStorage.textInputOffset(_selectedTextRange.startPosition.offset, advancedByUTF16Distance: -1)
-                selectedTextRange = TextRange(from: TextPosition(offset: newOffset), 
-                    to: TextPosition(offset: newOffset))
+                setTextInputSelection(TextRange(from: TextPosition(offset: newOffset),
+                    to: TextPosition(offset: newOffset)), notifyingDelegate: true)
             } else {
                 data = terminal.applicationCursor ? EscapeSequences.moveRightApp : EscapeSequences.moveRightNormal
                 // Update the carret to the new position so that deleteForward will delete the correct character
                 let newOffset = textInputStorage.textInputOffset(_selectedTextRange.startPosition.offset, advancedByUTF16Distance: 1)
-                selectedTextRange = TextRange(from: TextPosition(offset: newOffset), 
-                    to: TextPosition(offset: newOffset))
+                setTextInputSelection(TextRange(from: TextPosition(offset: newOffset),
+                    to: TextPosition(offset: newOffset)), notifyingDelegate: true)
             }
             send (data)
             lastFloatingCursorLocation = point

@@ -280,6 +280,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
     // The input delegate is part of UITextInput, and we notify it of changes.
     public weak var inputDelegate: UITextInputDelegate?
+    var textInputNotificationDepth = 0
 
     // This tracks the selection in the textInputStorage, it is not the same as our global selection, it is temporary
     var _selectedTextRange: TextRange = TextRange(from: TextPosition(offset: 0), to: TextPosition(offset: 0))
@@ -1976,7 +1977,12 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         return " "
     }
 
-    private func commitTextInput(_ text: String, applyModifiers: Bool) {
+    private enum TextInputEditOrigin: Equatable {
+        case system
+        case accessory
+    }
+
+    private func commitTextInput(_ text: String, applyModifiers: Bool, origin: TextInputEditOrigin) {
         let hadPendingAutoPeriodDelete = pendingAutoPeriodDeleteWasSpace
         if !isAutoPeriodReplacement(text) {
             pendingAutoPeriodDeleteWasSpace = false
@@ -1993,8 +1999,6 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             }
         }
 
-        beginTextInputEdit()
-
         let rangeToReplace = _markedTextRange ?? _selectedTextRange
         var textToInsert = text
         if let normalized = normalizedAutoPeriodInsertionText(text, rangeToReplace: rangeToReplace, hadPendingAutoPeriodDelete: hadPendingAutoPeriodDelete) {
@@ -2004,16 +2008,18 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             uitiLog("commitTextInput normalized:\(text.debugDescription) -> \(textToInsert.debugDescription)")
         }
 
-        let rangeStartIndex = rangeToReplace.startPosition.offset
-        textInputStorage.replaceSubrange(rangeToReplace.fullRange(in: textInputStorage), with: textToInsert)
-        _markedTextRange = nil
-        let insertedOffset = textInputStorage.textInputValidUTF16Offset(
-            rangeStartIndex + textToInsert.textInputUTF16Count,
-            rounding: .forward)
-        let insertedPosition = TextPosition(offset: insertedOffset)
-        _selectedTextRange = TextRange(from: insertedPosition, to: insertedPosition)
-
-        endTextInputEdit()
+        // UIKit already owns ordinary keyboard edits. Our normalization and accessory
+        // edits are external changes and must still invalidate its text context.
+        performTextInputEdit(notifyingDelegate: origin == .accessory || textToInsert != text) {
+            let rangeStartIndex = rangeToReplace.startPosition.offset
+            textInputStorage.replaceSubrange(rangeToReplace.fullRange(in: textInputStorage), with: textToInsert)
+            _markedTextRange = nil
+            let insertedOffset = textInputStorage.textInputValidUTF16Offset(
+                rangeStartIndex + textToInsert.textInputUTF16Count,
+                rounding: .forward)
+            let insertedPosition = TextPosition(offset: insertedOffset)
+            _selectedTextRange = TextRange(from: insertedPosition, to: insertedPosition)
+        }
 
         if !terminal.keyboardEnhancementFlags.isEmpty {
             sendKittyTextInput(textToInsert, applyModifiers: applyModifiers)
@@ -2038,7 +2044,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     }
 
     func insertTextFromAccessory(_ text: String) {
-        commitTextInput(text, applyModifiers: false)
+        commitTextInput(text, applyModifiers: false, origin: .accessory)
     }
 
     /*
@@ -2046,7 +2052,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     */
     open func insertText(_ text: String) {
         uitiLog("insertText(\(text.debugDescription)) \(textInputStateDescription())")
-        commitTextInput(text, applyModifiers: true)
+        commitTextInput(text, applyModifiers: true, origin: .system)
     }
     private func kittyEncoder() -> KittyKeyboardEncoder {
         KittyKeyboardEncoder(flags: terminal.keyboardEnhancementFlags,
@@ -2419,7 +2425,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         _ = sendKittyEvent(event)
     }
 
-    private func sendBackspaceKey() {
+    private func sendBackspaceKey(composing: Bool? = nil) {
         if terminal.keyboardEnhancementFlags.isEmpty {
             send([backspaceSendsControlH ? 8 : 0x7f])
             return
@@ -2430,7 +2436,7 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
                                          text: nil,
                                          shiftedKey: nil,
                                          baseLayoutKey: nil,
-                                         composing: kittyIsComposing))
+                                         composing: composing ?? kittyIsComposing))
     }
 
     // this is necessary because something in the iOS IME seems to prevent
@@ -2447,13 +2453,13 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
         uitiLog("koreanComposeFinal base:\(lastChar) jamo:\(jamo) -> \(composed)")
 
-        beginTextInputEdit()
-        textInputStorage.removeLast()
-        textInputStorage.append(composed)
-        let newOffset = textInputStorage.textInputUTF16Count
-        _markedTextRange = nil
-        _selectedTextRange = TextRange(from: TextPosition(offset: newOffset), to: TextPosition(offset: newOffset))
-        endTextInputEdit()
+        performTextInputEdit {
+            textInputStorage.removeLast()
+            textInputStorage.append(composed)
+            let newOffset = textInputStorage.textInputUTF16Count
+            _markedTextRange = nil
+            _selectedTextRange = TextRange(from: TextPosition(offset: newOffset), to: TextPosition(offset: newOffset))
+        }
 
         sendBackspaceKey()
         send(txt: String(composed))
@@ -2491,15 +2497,15 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
             uitiLog("koreanResyllabifyTransaction delete:\(edit.charactersToDelete) insert:\(edit.textToInsert.debugDescription)")
 
-            beginTextInputEdit()
-            for _ in 0..<edit.charactersToDelete {
-                textInputStorage.removeLast()
+            performTextInputEdit {
+                for _ in 0..<edit.charactersToDelete {
+                    textInputStorage.removeLast()
+                }
+                textInputStorage.append(contentsOf: edit.textToInsert)
+                let newOffset = textInputStorage.textInputUTF16Count
+                _markedTextRange = nil
+                _selectedTextRange = TextRange(from: TextPosition(offset: newOffset), to: TextPosition(offset: newOffset))
             }
-            textInputStorage.append(contentsOf: edit.textToInsert)
-            let newOffset = textInputStorage.textInputUTF16Count
-            _markedTextRange = nil
-            _selectedTextRange = TextRange(from: TextPosition(offset: newOffset), to: TextPosition(offset: newOffset))
-            endTextInputEdit()
 
             for _ in 0..<edit.charactersToDelete {
                 sendBackspaceKey()
@@ -2525,15 +2531,15 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
         uitiLog("koreanResyllabifyFinal base:\(lastChar) vowel:\(vowel) delete:\(edit.charactersToDelete) insert:\(edit.textToInsert.debugDescription)")
 
-        beginTextInputEdit()
-        for _ in 0..<edit.charactersToDelete {
-            textInputStorage.removeLast()
+        performTextInputEdit {
+            for _ in 0..<edit.charactersToDelete {
+                textInputStorage.removeLast()
+            }
+            textInputStorage.append(contentsOf: edit.textToInsert)
+            let newOffset = textInputStorage.textInputUTF16Count
+            _markedTextRange = nil
+            _selectedTextRange = TextRange(from: TextPosition(offset: newOffset), to: TextPosition(offset: newOffset))
         }
-        textInputStorage.append(contentsOf: edit.textToInsert)
-        let newOffset = textInputStorage.textInputUTF16Count
-        _markedTextRange = nil
-        _selectedTextRange = TextRange(from: TextPosition(offset: newOffset), to: TextPosition(offset: newOffset))
-        endTextInputEdit()
 
         for _ in 0..<edit.charactersToDelete {
             sendBackspaceKey()
@@ -2570,60 +2576,43 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
     open func deleteBackward() {
         uitiLog("deleteBackward() \(textInputStateDescription())")
 
-        // after backward deletion, marked range is always cleared, and length of selected range is always zero
+        // After backward deletion, marked text is cleared and the selection is collapsed.
         let rangeToDelete = _markedTextRange ?? _selectedTextRange
         var rangeStartPosition = rangeToDelete.startPosition
-        var rangeStartIndex = rangeStartPosition.offset
+        let deleteRange: Range<String.Index>
+        let backspaces: Int
         if rangeToDelete.isEmpty {
             resetKoreanResyllabificationTransaction()
-            // If there is no selected text, delete the character before the cursor
-
-            if rangeStartIndex == 0 {
-                // This is the case when the user hits backspace, but there is no text in the
-                // text input buffer.  This happens for example when text has been pasted.
-                // In that scenario, we should just send the backspace character to the terminal
+            guard let characterRange = textInputStorage.textInputCharacterRange(beforeUTF16Offset: rangeStartPosition.offset) else {
+                // Empty local context can still represent remote text (for example, pasted text).
                 pendingAutoPeriodDeleteWasSpace = false
-                self.sendBackspaceKey()
+                sendBackspaceKey()
                 uitiLog("deleteBackward() no text to delete, sending backspace")
                 return
             }
-
-            beginTextInputEdit()
-
-            guard let deleteRange = textInputStorage.textInputCharacterRange(beforeUTF16Offset: rangeStartIndex) else {
-                pendingAutoPeriodDeleteWasSpace = false
-                self.sendBackspaceKey()
-                uitiLog("deleteBackward() no text to delete, sending backspace")
-                endTextInputEdit()
-                return
-            }
-            rangeStartIndex = textInputStorage.textInputUTF16Offset(of: deleteRange.lowerBound)
+            deleteRange = characterRange
             let deletedChar = textInputStorage[deleteRange]
             let deletingAtEnd = rangeStartPosition.offset == textInputStorage.textInputUTF16Count
             pendingAutoPeriodDeleteWasSpace = deletingAtEnd && deletedChar == " " && _markedTextRange == nil
-            textInputStorage.removeSubrange(deleteRange)
-            rangeStartPosition = TextPosition(offset: rangeStartIndex)
-
-            self.sendBackspaceKey()
+            rangeStartPosition = TextPosition(offset: textInputStorage.textInputUTF16Offset(of: deleteRange.lowerBound))
+            backspaces = 1
         } else {
             pendingAutoPeriodDeleteWasSpace = false
-            beginTextInputEdit()
-            // Send as many backspaces that are in the range to delete. When on auto-repeat, after a some time
-            // pressing the backspace, it will delete chunks of text at a time.
-            let oldText = textInputStorage[rangeToDelete.fullRange(in: textInputStorage)]
+            deleteRange = rangeToDelete.fullRange(in: textInputStorage)
+            let oldText = textInputStorage[deleteRange]
             trackKoreanResyllabificationDeletion(oldText, range: rangeToDelete)
-            let backspaces = oldText.count
-            for _ in 0..<backspaces {
-                self.sendBackspaceKey()
-            }
-
-            textInputStorage.removeSubrange(rangeToDelete.fullRange(in: textInputStorage))
+            backspaces = oldText.count
         }
-        
-        _markedTextRange = nil
-        _selectedTextRange = TextRange(from: rangeStartPosition, to: rangeStartPosition)
 
-        endTextInputEdit()
+        let wasComposing = kittyIsComposing
+        performTextInputEdit(notifyingDelegate: false) {
+            textInputStorage.removeSubrange(deleteRange)
+            _markedTextRange = nil
+            _selectedTextRange = TextRange(from: rangeStartPosition, to: rangeStartPosition)
+        }
+        for _ in 0..<backspaces {
+            sendBackspaceKey(composing: wasComposing)
+        }
     }
 
     enum SendData {
