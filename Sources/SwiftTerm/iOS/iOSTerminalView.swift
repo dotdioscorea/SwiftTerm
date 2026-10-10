@@ -1614,10 +1614,9 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         // streaming output grows the content faster than the coasting offset, the
         // tail pulls away, and the view falls behind the live output.
         //
-        // NOTE: isTracking (finger down), not isDragging — on device isDragging
-        // stays true through the whole momentum coast, so it cannot distinguish
-        // an active drag from post-lift deceleration. contentSize is still
-        // updated above so the newly appended rows remain reachable.
+        // Keep following output when a fling has already reached the bottom.
+        // Only an existing history scroll owns the viewport during deceleration.
+        // contentSize is still updated above so new rows remain reachable.
         if isTracking || (userScrolling && isDecelerating) {
             return
         }
@@ -1732,17 +1731,11 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
             return
         }
 
-        // Freeze auto-follow only while the finger is physically down
-        // (isTracking). Excluding the momentum coast is essential: after the
-        // finger lifts, deceleration keeps firing sync while streaming output
-        // extends the content and the bottom recedes ahead of the coasting
-        // offset — treating that "not at the bottom yet" reading as a manual
-        // scroll would re-freeze a view the user just flung to the bottom. This
-        // must key off isTracking, not isDragging: on device isDragging stays
-        // true through the entire coast, so it fails to exclude momentum. It also
-        // covers layout/system-driven offset changes (startup sizing, rotation,
-        // keyboard insets, buffer shrink), which are never a manual scroll.
-        guard isTracking else {
+        // Keep the retained history row in sync while an existing scroll coasts
+        // after finger-up. Once the fling reaches the bottom, userScrolling is
+        // false, so a receding tail cannot re-freeze auto-follow. Untracked
+        // layout/system offsets still cannot begin a manual history scroll.
+        guard isTracking || (userScrolling && isDecelerating) else {
             return
         }
 
