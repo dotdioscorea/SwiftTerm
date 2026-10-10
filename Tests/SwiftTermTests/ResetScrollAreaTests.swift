@@ -10,6 +10,38 @@ import Testing
 /// buffer that was just discarded and renders blank.
 @Suite("Full reset scroll area")
 struct ResetScrollAreaTests {
+    @Test("ED3 invalidates native scroll geometry without erasing the active screen")
+    func savedLineEraseNotifiesDelegate() {
+        let (terminal, delegate) = TerminalTestHarness.makeTerminal(cols: 20, rows: 3, scrollback: 500)
+        terminal.feed(text: "old1\r\nold2\r\nactive1\r\nactive2\r\nactive3")
+        let active = TerminalTestHarness.visibleLinesText(buffer: terminal.buffer)
+        terminal.feed(text: "\u{1b}[2;7H\u{1b}7")
+        let before = delegate.bufferActivatedCount
+        terminal.feed(text: "\u{1b}[3J")
+        #expect(TerminalTestHarness.visibleLinesText(buffer: terminal.buffer) == active)
+        #expect(terminal.buffer.lines.count == terminal.rows)
+        #expect(delegate.bufferActivatedCount == before + 1)
+        terminal.feed(text: "\u{1b}[1;1H\u{1b}8")
+        TerminalTestHarness.assertCursor(terminal.buffer, col: 6, row: 1)
+    }
+
+    @Test("ED3 without saved lines leaves the alternate screen and normal history intact")
+    func savedLineEraseOnAlternateScreenIsANoop() {
+        let (terminal, delegate) = TerminalTestHarness.makeTerminal(cols: 20, rows: 3, scrollback: 500)
+        terminal.feed(text: "old1\r\nold2\r\nactive1\r\nactive2\r\nactive3")
+        let normalCount = terminal.buffer.lines.count
+        let normalText = TerminalTestHarness.visibleLinesText(buffer: terminal.buffer)
+        terminal.feed(text: "\u{1b}[?1049hAlternate screen")
+        let alternateText = TerminalTestHarness.visibleLinesText(buffer: terminal.buffer)
+        let before = delegate.bufferActivatedCount
+        terminal.feed(text: "\u{1b}[3J")
+        #expect(TerminalTestHarness.visibleLinesText(buffer: terminal.buffer) == alternateText)
+        #expect(delegate.bufferActivatedCount == before)
+        terminal.feed(text: "\u{1b}[?1049l")
+        #expect(terminal.buffer.lines.count == normalCount)
+        #expect(TerminalTestHarness.visibleLinesText(buffer: terminal.buffer) == normalText)
+    }
+
     @Test("RIS notifies the delegate that the buffer changed")
     func fullResetNotifiesDelegate() {
         let (terminal, delegate) = TerminalTestHarness.makeTerminal(cols: 80, rows: 24, scrollback: 500)

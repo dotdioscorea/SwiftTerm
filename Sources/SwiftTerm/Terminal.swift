@@ -3325,13 +3325,17 @@ open class Terminal {
             clearAllKittyImages()
             updateRange (0)
         case 3:
-            // Clear scrollback (everything not in viewport)
-            let scrollBackSize = buffer.lines.count - rows
+            // Erase saved lines while preserving the active grid and saved cursor.
+            let scrollBackSize = buffer.yBase
             if scrollBackSize > 0 {
                 buffer.lines.trimStart (count: scrollBackSize)
                 buffer.linesTop = 0
-                buffer.yBase = max (buffer.yBase - scrollBackSize, 0)
-                buffer.yDisp = max (buffer.yDisp - scrollBackSize, 0)
+                buffer.yBase = 0
+                buffer.yDisp = 0
+                refresh (startRow: 0, endRow: rows-1)
+                // The retained viewport no longer exists. Reconcile native scroll
+                // geometry and follow state, just as a full buffer reset does.
+                tdel?.bufferActivated (source: self)
             }
             break;
         default:
